@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SnowGlass - 冬季哈气雪花镜</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --glass-color: rgba(220, 235, 255, 0.1);
+            --ui-bg: rgba(20, 30, 40, 0.6);
+            --text-color: #ececec;
+            --accent-color: #8ab4f8;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0a0e14;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 主渲染画布 */
+        #mainCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            cursor: none; /* 隐藏默认鼠标 */
+        }
+
+        /* 隐藏的视频输入元素 */
+        #inputVideo {
+            display: none;
+        }
+
+        /* 极简 UI 面板 */
+        #uiPanel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: var(--ui-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+            color: var(--text-color);
+            width: 220px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: opacity 0.3s;
+        }
+
+        #uiPanel.hidden {
+            opacity: 0.3;
+        }
+        #uiPanel:hover {
+            opacity: 1;
+        }
+
+        .ui-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+        .ui-row:last-child { margin-bottom: 0; }
+
+        button {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: var(--text-color);
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+        button:hover { background: var(--accent-color); color: #1a1a1a; }
+        button.active { background: var(--accent-color); color: #1a1a1a; }
+
+        .status-text { font-size: 12px; color: #aaa; margin-top: 5px; text-align: center;}
+        #breath-gauge-container {
+            width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;
+        }
+        #breath-gauge-bar {
+            height: 100%; width: 0%; background: var(--accent-color); transition: width 0.1s;
+        }
+
+        /* 加载覆盖层 */
+        #loadingOverlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0a0e14; z-index: 100; display: flex;
+            justify-content: center; align-items: center; color: #8ab4f8; font-size: 18px;
+            flex-direction: column;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.1); border-top: 4px solid #8ab4f8;
+            border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+    <div class="spinner"></div>
+    <div id="loadingText">正在初始化模型...</div>
+</div>
+
+<div id="container">
+    <video id="inputVideo" playsinline></video>
+    <canvas id="mainCanvas"></canvas>
+
+    <div id="uiPanel">
+        <div class="ui-row">
+            <span style="font-weight: 600;">SnowGlass</span>
+            <button id="cameraBtn">开启摄像头</button>
+        </div>
+        <div class="status-text" id="cameraStatus">等待操作...</div>
+        <div style="margin: 15px 0; border-bottom: 1px solid rgba(255,255,255,0.1);"></div>
+        <div class="ui-row">
+            <span>哈气强度 (空格键)</span>
+            <div style="width: 80px;">
+                <div id="breath-gauge-container">
+                    <div id="breath-gauge-bar"></div>
+                </div>
+            </div>
+        </div>
+        <div class="ui-row">
+            <span>雪花飘落</span>
+            <button id="snowBtn" class="active">开</button>
+        </div>
+        <div class="ui-row">
+            <span>对称擦拭</span>
+            <button id="symmetryBtn">关</button>
+        </div>
+        <div class="ui-row" style="margin-top:15px;">
+             <button id="clearFogBtn" style="width:100%; background: rgba(255,100,100,0.2);">清除所有雾气</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * SnowGlass - 核心逻辑
+ * 包含: Canvas2D渲染, MediaPipe Hooks, 雾气系统, 粒子系统, 交互平滑处理
+ */
+
+// --- 配置项 ---
+const CONFIG = {
+    fogMaxOpacity: 0.85,    // 最大雾气不透明度
+    fogBuildRate: 0.02,     // 哈气累积速度
+    fogDecayRate: 0.0008,   // 雾气自然消散速度
+    wipeSize: 45,           // 擦拭笔触大小
+    wipeSoftness: 0.6,      // 擦拭边缘柔和度 (0-1)
+    handSmoothing: 0.15,    // 手指位置平滑系数 (越小越平滑，延迟越高)
+    wipeActivationDelay: 800, // 检测到手后延迟多久开始擦拭 (ms)
+    breathThreshold: 0.12,  // 嘴巴张开多大算哈气 (0-1 normalized)
+    snowCount: 80,          // 雪花数量
+    cameraBlur: 'blur(3px) brightness(0.7) contrast(1.1)', // 摄像头背景滤镜
+    easterEggHoldTime: 60,  // 触发彩蛋需要保持手势的帧数 (约1秒)
+};
+
+// --- 状态管理 ---
+const state = {
+    isCameraRunning: false,
+    isSnowEnabled: true,
+    isSymmetryEnabled: false,
+    breathStrength: 0,
+    isSpacebarDown: false,
+    modelsLoaded: { hands: false, face: false },
+    handDetectedTime: 0, // 记录手首次被检测到的时间
+    isWipingActive: false,
+    easterEggCounter: 0,
+    isEasterEggActive: false,
+};
+
+// --- DOM 元素 ---
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true }); // 优化读取操作
+const videoElement = document.getElementById('inputVideo');
+const uiBar = document.getElementById('breath-gauge-bar');
+const cameraStatus = document.getElementById('cameraStatus');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText = document.getElementById('loadingText');
+
+// --- 离屏 Canvas (用于累积雾气层) ---
+let fogCanvas, fogCtx;
+
+// --- 追踪数据容器 ---
+let handLandmarks = null;
+let faceLandmarks = null;
+// 平滑后的手指位置
+let smoothedFinger = { x: 0, y: 0 };
+
+
+// ==========================================
+// 初始化与系统设置
+// ==========================================
+function initSystem() {
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    initFogLayer();
+    setupUI();
+    initSnow();
+    loadMediaPipeModels();
+    requestAnimationFrame(renderLoop); // 启动主渲染循环
+}
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    if (fogCanvas) {
+        // 调整大小需要保留当前的雾气，稍微复杂点，这里简化为重置
+        initFogLayer(); 
+    }
+}
+
+function initFogLayer() {
+    fogCanvas = document.createElement('canvas');
+    fogCanvas.width = canvas.width;
+    fogCanvas.height = canvas.height;
+    fogCtx = fogCanvas.getContext('2d', { willReadFrequently: true });
+    // 初始填满轻微的冷色雾气
+    fogCtx.fillStyle = 'rgba(200, 210, 230, 0.1)';
+    fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+}
+
+// ==========================================
+// MediaPipe 模型加载与配置
+// ==========================================
+async function loadMediaPipeModels() {
+    try {
+        loadingText.textContent = "正在加载手部追踪模型...";
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+        hands.onResults(onHandsResults);
+        state.modelsLoaded.hands = true;
+
+        loadingText.textContent = "正在加载面部网格模型...";
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+        faceMesh.onResults(onFaceResults);
+        state.modelsLoaded.face = true;
+
+        // 设置相机工具
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                if (!state.isCameraRunning) return;
+                // 镜像处理视频帧再发送给模型
+                await hands.send({image: videoElement});
+                await faceMesh.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        window.cameraInstance = camera; // 保存实例以便启动
+
+        loadingOverlay.style.display = 'none'; // 模型加载完毕，隐藏遮罩
+        cameraStatus.textContent = "模型就绪，请开启摄像头";
+
+    } catch (e) {
+        console.error("模型加载失败:", e);
+        loadingText.textContent = "模型加载失败，请刷新重试。";
+        loadingText.style.color = "#ff6b6b";
+    }
+}
+
+function onHandsResults(results) {
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        handLandmarks = results.multiHandLandmarks[0];
+    } else {
+        handLandmarks = null;
+        state.handDetectedTime = 0; // 重置检测时间
+        state.isWipingActive = false;
+    }
+}
+
+function onFaceResults(results) {
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        faceLandmarks = results.multiFaceLandmarks[0];
+    } else {
+        faceLandmarks = null;
+    }
+}
+
+// ==========================================
+// 摄像头控制
+// ==========================================
+function toggleCamera() {
+    const btn = document.getElementById('cameraBtn');
+    if (!state.isCameraRunning) {
+        cameraStatus.textContent = "正在请求摄像头权限...";
+        window.cameraInstance.start()
+            .then(() => {
+                state.isCameraRunning = true;
+                btn.textContent = "关闭摄像头";
+                btn.classList.add('active');
+                cameraStatus.textContent = "摄像头已开启，系统运行中";
+            })
+            .catch(err => {
+                console.error("摄像头启动失败:", err);
+                cameraStatus.textContent = "无法访问摄像头，请检查权限";
+                btn.classList.remove('active');
+            });
+    } else {
+        window.cameraInstance.stop();
+        state.isCameraRunning = false;
+        btn.textContent = "开启摄像头";
+        btn.classList.remove('active');
+        cameraStatus.textContent = "摄像头已关闭";
+    }
+}
+
+// ==========================================
+// 核心功能实现: 哈气、擦拭、彩蛋
+// ==========================================
+
+// 1. 哈气逻辑 (基于 FaceMesh 或空格键)
+function processBreath() {
+    let strength = 0;
+
+    if (state.isSpacebarDown) {
+        strength = 0.8; // 手动哈气强度
+    } else if (faceLandmarks) {
+        // 计算嘴巴张开度 (上唇中点到下唇中点的距离)
+        // Mesh点位: 上唇下沿中心(13), 下唇上沿中心(14)
+        const upperLip = faceLandmarks[13];
+        const lowerLip = faceLandmarks[14];
+        // 简单计算Y轴距离，归一化处理（假设人脸距离适中）
+        const distance = Math.abs(upperLip.y - lowerLip.y);
+        // 经验值: distance > 0.05 算张嘴。归一化到 0-1
+        strength = Math.max(0, (distance - 0.02) * 5);
+        if (strength < CONFIG.breathThreshold) strength = 0;
+        strength = Math.min(1, strength); // Clamp to 1
+    }
+
+    state.breathStrength = strength * 0.1 + state.breathStrength * 0.9; // 平滑显示数值
+
+    // 更新 UI 进度条
+    uiBar.style.width = `${state.breathStrength * 100}%`;
+
+    // 如果在哈气，向雾气层添加雾
+    if (strength > CONFIG.breathThreshold && faceLandmarks) {
+        const mouthX = faceLandmarks[13].x * fogCanvas.width;
+        const mouthY = faceLandmarks[13].y * fogCanvas.height;
+        // 镜像修正X坐标 (因为视频是镜像的)
+        const mirroredMouthX = fogCanvas.width - mouthX;
+
+        addFog(mirroredMouthX, mouthY, strength);
+    }
+}
+
+function addFog(x, y, intensity) {
+    fogCtx.globalCompositeOperation = 'source-over';
+    // 使用径向渐变模拟柔和的哈气
+    const radius = 80 + intensity * 60;
+    const gradient = fogCtx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(220, 235, 255, ${CONFIG.fogBuildRate * intensity})`);
+    gradient.addColorStop(1, 'rgba(220, 235, 255, 0)');
+
+    fogCtx.fillStyle = gradient;
+    fogCtx.beginPath();
+    fogCtx.arc(x, y, radius, 0, Math.PI * 2);
+    fogCtx.fill();
+}
+
+// 2. 擦拭逻辑 (基于 Hands)
+function processWipe() {
+    // 雾气自然消散 (Decay)
+    fogCtx.globalCompositeOperation = 'destination-out';
+    fogCtx.fillStyle = `rgba(0,0,0, ${CONFIG.fogDecayRate})`;
+    fogCtx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+
+    if (!handLandmarks) {
+        state.isEasterEggActive = false; // 手消失则重置彩蛋状态
+        state.easterEggCounter = 0;
+        return;
+    }
+
+    const now = Date.now();
+    // 检测到手后，记录时间
+    if (state.handDetectedTime === 0) {
+        state.handDetectedTime = now;
+    }
+
+    // 获取食指指尖 (Index 8)
+    const indexTip = handLandmarks[8];
+    // 镜像修正X坐标
+    const targetX = (1 - indexTip.x) * canvas.width;
+    const targetY = indexTip.y * canvas.height;
+
+    // 位置指数平滑 (Exponential Smoothing)
+    smoothedFinger.x = smoothedFinger.x + (targetX - smoothedFinger.x) * CONFIG.handSmoothing;
+    smoothedFinger.y = smoothedFinger.y + (targetY - smoothedFinger.y) * CONFIG.handSmoothing;
+
+    // 判断是否过了激活延迟期
+    if (now - state.handDetectedTime > CONFIG.wipeActivationDelay) {
+        state.isWipingActive = true;
+        // 只有没在触发彩蛋时才擦拭
+        if (!state.isEasterEggActive) {
+            applyWipe(smoothedFinger.x, smoothedFinger.y);
+            if (state.isSymmetryEnabled) {
+                 applyWipe(canvas.width - smoothedFinger.x, smoothedFinger.y);
+            }
+        }
+    } else {
+        state.isWipingActive = false;
+        // 可以在这里绘制一个“准备中”的光标
+    }
+    
+    detectEasterEggGesture();
+}
+
+function applyWipe(x, y) {
+    fogCtx.globalCompositeOperation = 'destination-out';
+    // 使用径向渐变实现柔和边缘的擦除
+    const gradient = fogCtx.createRadialGradient(x, y, 0, x, y, CONFIG.wipeSize);
+    // 中心完全擦除(alpha 1)，边缘渐变到不擦除(alpha 0)
+    gradient.addColorStop(0, 'rgba(0,0,0,1)');
+    gradient.addColorStop(CONFIG.wipeSoftness, 'rgba(0,0,0,1)'); 
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+    fogCtx.fillStyle = gradient;
+    fogCtx.beginPath();
+    fogCtx.arc(x, y, CONFIG.wipeSize, 0, Math.PI * 2);
+    fogCtx.fill();
+}
+
+// 6. 彩蛋: 识别 "Victory/Peace" 手势 (食指+中指伸直，其他弯曲)
+function detectEasterEggGesture() {
+    if (!handLandmarks) return;
+    // 简化判断：食指指尖(8)和中指指尖(12)都高于它们各自的关节(6, 10)，且两者距离适中
+    const indexTip = handLandmarks[8];
+    const middleTip = handLandmarks[12];
+    const indexPip = handLandmarks[6];
+    const middlePip = handLandmarks[10];
+    const wrist = handLandmarks[0];
+
+    const isIndexUp = indexTip.y < indexPip.y;
+    const isMiddleUp = middleTip.y < middlePip.y;
+    
+    // 计算两指尖距离
+    const dx = indexTip.x - middleTip.x;
+    const dy = indexTip.y - middleTip.y;
+    const tipDistance = Math.sqrt(dx*dx + dy*dy);
+    
+    // 简单的手势判定逻辑 (可以根据需要调优)
+    if (isIndexUp && isMiddleUp && tipDistance > 0.04 && tipDistance < 0.15) {
+        state.easterEggCounter++;
+    } else {
+        state.easterEggCounter = Math.max(0, state.easterEggCounter - 2); // 缓慢下降
+    }
+
+    // 触发彩蛋
+    if (state.easterEggCounter > CONFIG.easterEggHoldTime) {
+        state.isEasterEggActive = true;
+        state.easterEggCounter = CONFIG.easterEggHoldTime; // Clamp
+        triggerEasterEggEffect();
+    }
+}
+
+function triggerEasterEggEffect() {
+    // 简单的彩蛋效果：瞬间增加大量雪花，并改变颜色
+    if(snowParticles.length < CONFIG.snowCount * 2) {
+         for(let i=0; i<20; i++) {
+             snowParticles.push(new SnowParticle(true)); // true 表示是彩蛋粒子
+         }
+    }
+}
+
+
+// ==========================================
+// 雪花系统
+// ==========================================
+let snowParticles = [];
+class SnowParticle {
+    constructor(isBonus = false) {
+        this.reset(true);
+        this.isBonus = isBonus;
+        if (isBonus) {
+             this.color = `hsl(${Math.random() * 360}, 70%, 80%)`;
+             this.size = Math.random() * 4 + 2;
+             this.speedY = Math.random() * 3 + 2;
+        } else {
+            this.color = 'rgba(255, 255, 255, 0.8)';
+        }
+    }
+    reset(initial = false) {
+        this.x = Math.random() * canvas.width;
+        this.y = initial ? Math.random() * canvas.height : -10;
+        this.size = Math.random() * 3 + 1;
+        this.speedY = Math.random() * 1.5 + 0.5;
+        this.wobble = Math.random() * Math.PI * 2;
+        this.wobbleSpeed = Math.random() * 0.05 + 0.01;
+    }
+    update() {
+        this.y += this.speedY;
+        this.wobble += this.wobbleSpeed;
+        this.x += Math.sin(this.wobble) * 0.5;
+
+        if (this.y > canvas.height) {
+            if (this.isBonus) {
+                 // 彩蛋粒子掉出屏幕后移除
+                 return false;
+            }
+            this.reset();
+        }
+        return true;
+    }
+    draw(c) {
+        c.fillStyle = this.color;
+        c.beginPath();
+        c.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        c.fill();
+    }
+}
+
+function initSnow() {
+    for (let i = 0; i < CONFIG.snowCount; i++) {
+        snowParticles.push(new SnowParticle());
+    }
+}
+
+function renderSnow() {
+    if (!state.isSnowEnabled) return;
+    // 更新并过滤掉需要移除的粒子
+    snowParticles = snowParticles.filter(p => {
+        p.draw(ctx);
+        return p.update();
+    });
+    // 如果彩蛋结束，补充普通雪花到基准数量
+    while (snowParticles.length < CONFIG.snowCount && !state.isEasterEggActive) {
+         snowParticles.push(new SnowParticle());
+    }
+}
+
+// ==========================================
+// 主渲染循环 (The Core Loop)
+// ==========================================
+function renderLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. 处理交互逻辑 (更新状态，但不直接绘制到主画布)
+    if (state.isCameraRunning) {
+        processBreath();
+        processWipe();
+    }
+
+    // ----- 图层合成开始 -----
+
+    // Layer 1: 视频背景层 (带滤镜)
+    ctx.save();
+    // 镜像并应用滤镜
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.filter = CONFIG.cameraBlur;
+    if (state.isCameraRunning && videoElement.readyState === 4) {
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    } else {
+        // 相机未开启时的占位背景
+        ctx.fillStyle = '#0a0e14';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    ctx.filter = 'none'; // 重置滤镜
+    ctx.restore();
+
+
+    // Layer 2: 玻璃质感叠加层 ( subtle reflection/gradient )
+    // 使用线性渐变模拟玻璃反光
+    const glassGradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    glassGradient.addColorStop(0, 'rgba(255, 255, 255, 0.05)');
+    glassGradient.addColorStop(0.5, 'rgba(200, 220, 255, 0.02)');
+    glassGradient.addColorStop(1, 'rgba(255, 255, 255, 0.08)');
+    ctx.fillStyle = glassGradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+    // Layer 3: 雾气层
+    // 将离屏的雾气 Canvas 绘制上来
+    // 控制最大不透明度
+    ctx.globalAlpha = CONFIG.fogMaxOpacity;
+    ctx.drawImage(fogCanvas, 0, 0);
+    ctx.globalAlpha = 1.0;
+
+
+    // Layer 4: 交互反馈与前景
+    // 绘制擦拭点光标 (如果激活)
+    if (state.isWipingActive && !state.isEasterEggActive) {
+        drawWipeCursor(smoothedFinger.x, smoothedFinger.y);
+        if (state.isSymmetryEnabled) {
+             drawWipeCursor(canvas.width - smoothedFinger.x, smoothedFinger.y);
+        }
+    } else if (handLandmarks && !state.isWipingActive) {
+         // 准备状态的光标 (还没开始擦)
+         drawWaitingCursor(smoothedFinger.x, smoothedFinger.y);
+    }
+    
+    // 彩蛋触发提示
+    if (state.isEasterEggActive) {
+        ctx.fillStyle = "rgba(255, 255, 100, 0.8)";
+        ctx.font = "20px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("🎉 彩蛋触发! 🎉", canvas.width/2, 100);
+    }
+
+    // Layer 5: 雪花层
+    renderSnow();
+
+    // ----- 图层合成结束 -----
+
+    requestAnimationFrame(renderLoop);
+}
+
+function drawWipeCursor(x, y) {
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.fill();
+    // 外发光圈
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(138, 180, 248, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+function drawWaitingCursor(x, y) {
+    // 一个带有加载感的光标
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 100, 100, 0.5)'; // 红色表示还没准备好
+    ctx.fill();
+    
+    // 画一个简单的进度圈
+    const progress = Math.min(1, (Date.now() - state.handDetectedTime) / CONFIG.wipeActivationDelay);
+    ctx.beginPath();
+    ctx.arc(x, y, 12, -Math.PI/2, -Math.PI/2 + progress * Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 100, 100, 0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+// ==========================================
+// UI 事件绑定
+// ==========================================
+function setupUI() {
+    document.getElementById('cameraBtn').addEventListener('click', toggleCamera);
+    
+    const snowBtn = document.getElementById('snowBtn');
+    snowBtn.addEventListener('click', () => {
+        state.isSnowEnabled = !state.isSnowEnabled;
+        snowBtn.textContent = state.isSnowEnabled ? "开" : "关";
+        snowBtn.classList.toggle('active', state.isSnowEnabled);
+    });
+
+    const symmetryBtn = document.getElementById('symmetryBtn');
+    symmetryBtn.addEventListener('click', () => {
+        state.isSymmetryEnabled = !state.isSymmetryEnabled;
+        symmetryBtn.textContent = state.isSymmetryEnabled ? "开" : "关";
+        symmetryBtn.classList.toggle('active', state.isSymmetryEnabled);
+    });
+    
+    document.getElementById('clearFogBtn').addEventListener('click', () => {
+         fogCtx.clearRect(0,0,fogCanvas.width, fogCanvas.height);
+    });
+
+    // 空格键哈气
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space') state.isSpacebarDown = true; });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space') state.isSpacebarDown = false; });
+
+    // UI 面板自动隐藏交互
+    const uiPanel = document.getElementById('uiPanel');
+    let uiHideTimeout;
+    function resetUiTimer() {
+        uiPanel.classList.remove('hidden');
+        clearTimeout(uiHideTimeout);
+        uiHideTimeout = setTimeout(() => { uiPanel.classList.add('hidden'); }, 5000);
+    }
+    document.addEventListener('mousemove', resetUiTimer);
+    resetUiTimer(); // 启动定时器
+}
+
+// 启动系统
+window.onload = initSystem;
+
+</script>
+</body>
+</html>
